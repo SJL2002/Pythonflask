@@ -1,74 +1,103 @@
-import streamlit as st
+from flask import Flask, request, render_template
+from wtforms import Form, TextAreaField, validators
 import pickle
 import sqlite3
+import os
 import numpy as np
 
+app = Flask(__name__)
+
 # Load the trained LightGBM model
-model_path = 'model/lgbmodel.pkl'  # Adjust the path accordingly
+model_path = os.path.join(os.path.dirname(__file__), 'model', 'lgbmodel.pkl')
 with open(model_path, 'rb') as file:
     model = pickle.load(file)
 
 # Define the database path
-db_path = 'database.db'
+db_path = os.path.join(os.path.dirname(__file__), 'database.db')
 
-# Initialize the database if necessary
-conn = sqlite3.connect(db_path)
-conn.close()  # Just to ensure the database is created
-
-# Streamlit app
-st.title('Health Prediction App')
-
-# Input form using Streamlit widgets
-st.write('Enter Patient Information:')
-gender = st.selectbox('Gender', ['Male', 'Female'])
-age = st.number_input('Age', min_value=0, max_value=120)
-hypertension = st.selectbox('Hypertension', ['No', 'Yes'])
-heart_disease = st.selectbox('Heart Disease', ['No', 'Yes'])
-work_type = st.selectbox('Work Type', ['Private', 'Self-employed', 'Govt_job', 'Children', 'Never_worked'])
-residence_type = st.selectbox('Residence Type', ['Urban', 'Rural'])
-avg_glucose_level = st.number_input('Avg Glucose Level', min_value=0.0, max_value=300.0)
-bmi = st.number_input('BMI', min_value=10.0, max_value=60.0)
-smoking_status = st.selectbox('Smoking Status', ['Unknown', 'Never smoked', 'Formerly smoked', 'Smokes'])
-
-submit_button = st.button('Predict')
-
-if submit_button:
-    # Convert categorical inputs to numerical for prediction
-    gender = 1 if gender == 'Male' else 0
-    hypertension = 1 if hypertension == 'Yes' else 0
-    heart_disease = 1 if heart_disease == 'Yes' else 0
-    work_type_mapping = {'Private': 0, 'Self-employed': 1, 'Govt_job': 2, 'Children': 3, 'Never_worked': 4}
-    work_type = work_type_mapping.get(work_type, 0)
-    residence_type = 1 if residence_type == 'Urban' else 0
-    smoking_status_mapping = {'Unknown': 0, 'Never smoked': 1, 'Formerly smoked': 2, 'Smokes': 3}
-    smoking_status = smoking_status_mapping.get(smoking_status, 0)
-
-    # Prepare input data for prediction
-    input_data = np.array([gender, age, hypertension, heart_disease, work_type, residence_type,
-                           avg_glucose_level, bmi, smoking_status]).reshape(1, -1)
-
-    # Predict using the pre-trained LightGBM model
-    prediction = model.predict_proba(input_data)[:, 1][0]  # Probability of positive class
-
-    # Determine the result based on the prediction probability
-    if prediction >= 0.70:
-        result = "Advice for check up"
-    elif 0.40 <= prediction <= 0.69:
-        result = "Be wary"
-    else:
-        result = "No"
-
-    # Display prediction result
-    st.write(f'Prediction Probability: {prediction:.2f}')
-    st.write(f'Result: {result}')
-
-    # Store the prediction in the database
+def init_db():
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
-    c.execute('''INSERT INTO predictions (gender, age, hypertension, heart_disease, work_type, Residence_type,
-                 avg_glucose_level, bmi, smoking_status, prediction, result)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-              (gender, age, hypertension, heart_disease, work_type, residence_type,
-               avg_glucose_level, bmi, smoking_status, prediction, result))
+    c.execute('''CREATE TABLE IF NOT EXISTS predictions
+                 (id INTEGER PRIMARY KEY, gender INTEGER, age REAL, hypertension INTEGER, heart_disease INTEGER,
+                 work_type INTEGER, Residence_type INTEGER, avg_glucose_level REAL, bmi REAL, smoking_status INTEGER,
+                 prediction REAL, result TEXT)''')
     conn.commit()
     conn.close()
+
+def alter_table():
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    try:
+        c.execute('ALTER TABLE predictions ADD COLUMN result TEXT')
+    except sqlite3.OperationalError as e:
+        print(f"OperationalError: {e}")
+    conn.commit()
+    conn.close()
+
+# Initialize the database and alter table if necessary
+init_db()
+alter_table()
+
+# WTForms for input validation
+class PredictionForm(Form):
+    gender = TextAreaField('Gender', [validators.DataRequired()])
+    age = TextAreaField('Age', [validators.DataRequired()])
+    hypertension = TextAreaField('Hypertension', [validators.DataRequired()])
+    heart_disease = TextAreaField('Heart Disease', [validators.DataRequired()])
+    work_type = TextAreaField('Work Type', [validators.DataRequired()])
+    Residence_type = TextAreaField('Residence Type', [validators.DataRequired()])
+    avg_glucose_level = TextAreaField('Avg Glucose Level', [validators.DataRequired()])
+    bmi = TextAreaField('BMI', [validators.DataRequired()])
+    smoking_status = TextAreaField('Smoking Status', [validators.DataRequired()])
+
+@app.route('/')
+def index():
+    form = PredictionForm(request.form)
+    return render_template('index.html', form=form)
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    form = PredictionForm(request.form)
+    if request.method == 'POST' and form.validate():
+        data = request.form.to_dict()
+        features = ['gender', 'age', 'hypertension', 'heart_disease', 'work_type', 'Residence_type',
+                    'avg_glucose_level', 'bmi', 'smoking_status']
+
+        # Convert input data to the appropriate format
+        input_data = [float(data[feature]) for feature in features]
+        input_data = np.array(input_data).reshape(1, -1)
+
+        # Predict using the pre-trained LightGBM model
+        prediction = model.predict_proba(input_data)[:, 1][0]  # Get the probability for the positive class
+
+        # Determine the result based on the prediction probability
+        if prediction >= 0.70:
+            result = "Advice for check up"
+        elif 0.40 <= prediction <= 0.69:
+            result = "Be wary"
+        else:
+            result = "No"
+
+        # Store the prediction in the database
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute('''INSERT INTO predictions (gender, age, hypertension, heart_disease, work_type, Residence_type,
+                     avg_glucose_level, bmi, smoking_status, prediction, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (*input_data[0], prediction, result))
+        conn.commit()
+        conn.close()
+
+        return render_template('results.html', prediction=prediction, result=result)
+
+    return render_template('index.html', form=form)
+
+@app.route('/submit_feedback', methods=['POST'])
+def submit_feedback():
+    feedback = request.form['feedback']
+    # Store feedback in a database or handle it accordingly
+    print(f"Feedback received: {feedback}")
+    return render_template('thank_you.html')
+
+if __name__ == '__main__':
+    app.run(debug=True)

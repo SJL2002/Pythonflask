@@ -1,6 +1,7 @@
-Flask==2.0.2
-WTForms==2.3.3
-pandas==1.4.0
-numpy==1.22.2
-lightgbm==3.3.3
 streamlit
+wtforms
+numpy
+scikit-learn
+lightgbm>=3.3.1
+scipy>=1.7.0
+pickle5
